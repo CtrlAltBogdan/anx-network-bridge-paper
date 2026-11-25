@@ -1,0 +1,15 @@
+name: ANXNetworkBridge
+main: run.anx.bridge.PaperBridge
+version: 1.0.0
+api-version: '1.21'
+author: anx.run
+description: Sends aggregated network statistics to anx.run
+softdepend: [floodgate, Geyser-Spigot]
+commands:
+  anx:
+    description: ANX Network Bridge status and pairing
+    usage: /anx status | /anx pair <code>
+    permission: anx.admin
+permissions:
+  anx.admin:
+    default: op

@@ -1,0 +1,86 @@
+plugins { id 'java' }
+
+group = 'run.anx'
+def releaseVersion = version.toString()
+
+repositories {
+    mavenCentral()
+    maven { url = 'https://repo.papermc.io/repository/maven-public/' }
+}
+
+dependencies {
+    compileOnly 'io.papermc.paper:paper-api:1.21.4-R0.1-SNAPSHOT'
+}
+
+java { toolchain { languageVersion = JavaLanguageVersion.of(21) } }
+sourceSets {
+    main.java.srcDirs = ['src/main/java', 'core/src/main/java']
+    test.java.srcDirs = ['core/src/test/java']
+}
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+    options.release = 21
+    options.compilerArgs += ['-Xlint:all', '-Werror']
+}
+tasks.withType(AbstractArchiveTask).configureEach {
+    preserveFileTimestamps = false
+    reproducibleFileOrder = true
+}
+tasks.named('jar') {
+    archiveBaseName = 'anx-network-bridge-paper'
+    manifest.attributes('Implementation-Title': 'ANX Network Bridge for Paper', 'Implementation-Version': releaseVersion)
+}
+
+def lock = new Properties()
+file('core.lock').withInputStream { lock.load(it) }
+
+tasks.register('verifyCoreLock') {
+    group = 'verification'
+    inputs.files(fileTree('core/src'))
+    inputs.file('core.lock')
+    doLast {
+        def actual = providers.exec {
+            commandLine 'sh', 'scripts/core-tree-hash.sh', 'core'
+        }.standardOutput.asText.get().trim()
+        def expected = lock.getProperty('core.treeSha256')
+        if (actual != expected) throw new GradleException("Vendored core hash is ${actual}, expected ${expected}; run scripts/update-core.sh ${lock.getProperty('core.tag')}")
+    }
+}
+
+tasks.register('checkVersion') {
+    group = 'verification'
+    inputs.files('gradle.properties', 'core/src/main/java/run/anx/bridge/Agent.java')
+    doLast {
+        def source = file('core/src/main/java/run/anx/bridge/Agent.java').text
+        def match = source =~ /VERSION = "([^"]+)"/
+        if (!match.find() || match.group(1) != releaseVersion) {
+            throw new GradleException("Agent.VERSION does not match project version ${releaseVersion}")
+        }
+    }
+}
+
+tasks.register('selfTest', JavaExec) {
+    group = 'verification'
+    description = 'Runs the dependency-free core integration and smoke tests'
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'run.anx.bridge.CoreSelfTest'
+}
+
+tasks.register('verifyDistribution') {
+    group = 'verification'
+    dependsOn tasks.named('jar')
+    doLast {
+        def jar = tasks.named('jar').get().archiveFile.get().asFile
+        def tree = zipTree(jar)
+        def entries = tree.files.collect { it.name } as Set
+        ['Agent.class', 'PaperBridge.class', 'plugin.yml'].each {
+            if (!entries.contains(it)) throw new GradleException("${jar.name} does not contain ${it}")
+        }
+        if (!tree.matching { include 'plugin.yml' }.singleFile.text.contains('version: ' + releaseVersion)) {
+            throw new GradleException("plugin.yml version does not match ${releaseVersion}")
+        }
+    }
+}
+
+tasks.named('test') { failOnNoDiscoveredTests = false }
+tasks.named('check') { dependsOn 'verifyCoreLock', 'checkVersion', 'selfTest', 'verifyDistribution' }

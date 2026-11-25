@@ -1,0 +1,4 @@
+core.repository=https://github.com/CtrlAltBogdan/anx-network-bridge-core.git
+core.tag=v1.0.0
+core.commit=72859f613d9e5fd86dce857822e04cd3c542fa22
+core.treeSha256=7e3e37dcca4d3147ff7bbd9166825b67ab37d0b566a48b94836ebc6c71cc8b47

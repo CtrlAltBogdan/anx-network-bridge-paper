@@ -1,0 +1,65 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*.*.*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
+        with: { distribution: temurin, java-version: '21' }
+      - uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
+        with: { validate-wrappers: true, cache-read-only: true }
+      - id: version
+        run: |
+          v=$(sed -n 's/^version=//p' gradle.properties)
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          test "$GITHUB_REF_TYPE" != tag || test "$GITHUB_REF_NAME" = "v$v"
+          grep -q "^## \[$v\]" CHANGELOG.md
+      - run: scripts/verify-core.sh --remote
+      - run: ./gradlew clean build --no-daemon
+      - name: Prepare release files
+        run: |
+          v=${{ steps.version.outputs.version }}
+          mkdir release
+          cp "build/libs/anx-network-bridge-paper-$v.jar" release/
+          (cd release && sha256sum "anx-network-bridge-paper-$v.jar" > "anx-network-bridge-paper-$v.jar.sha256")
+          { echo "## ANX Network Bridge for Paper $v"; echo; awk -v v="$v" '/^## \[/{p = index($0, "[" v "]") > 0; next} p' CHANGELOG.md; echo; echo '```'; cat release/*.sha256; echo '```'; } > release/notes.md
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with: { name: release, path: release/, if-no-files-found: error }
+  publish:
+    needs: build
+    if: github.event_name == 'push' && github.ref_type == 'tag'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with: { name: release, path: release }
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          V: ${{ needs.build.outputs.version }}
+        run: |
+          cd release
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            if [ -z "$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name')" ]; then
+              gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" "anx-network-bridge-paper-$V.jar" "anx-network-bridge-paper-$V.jar.sha256"
+              gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --title "ANX Network Bridge for Paper $V" --notes-file notes.md --prerelease=false --draft=false --latest
+              exit 0
+            fi
+            gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern '*.sha256' --dir published
+            cmp -s "published/anx-network-bridge-paper-$V.jar.sha256" "anx-network-bridge-paper-$V.jar.sha256" && exit 0
+            echo "::error::Release $TAG exists with different bytes"; exit 1
+          fi
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --verify-tag --title "ANX Network Bridge for Paper $V" --notes-file notes.md "anx-network-bridge-paper-$V.jar" "anx-network-bridge-paper-$V.jar.sha256"

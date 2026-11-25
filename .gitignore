@@ -1,0 +1,8 @@
+.gradle/
+build/
+out/
+.idea/
+*.iml
+config.yml
+agent.key
+rewarded.txt
